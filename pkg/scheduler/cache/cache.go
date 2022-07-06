@@ -235,7 +235,24 @@ func podConditionHaveUpdate(status *v1.PodStatus, condition *v1.PodCondition) bo
 func (su *defaultStatusUpdater) UpdatePodCondition(pod *v1.Pod, condition *v1.PodCondition) (*v1.Pod, error) {
 	klog.V(3).Infof("Updating pod condition for %s/%s to (%s==%s)", pod.Namespace, pod.Name, condition.Type, condition.Status)
 	if podutil.UpdatePodCondition(&pod.Status, condition) {
-		return su.kubeclient.CoreV1().Pods(pod.Namespace).UpdateStatus(context.TODO(), pod, metav1.UpdateOptions{})
+		if result, err := su.kubeclient.CoreV1().Pods(pod.Namespace).UpdateStatus(context.TODO(), pod, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) {
+				// Retry update on conflict
+				pod, err := su.kubeclient.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{})
+				if err != nil {
+					return nil, err
+				}
+
+				podutil.UpdatePodCondition(&pod.Status, condition)
+				if result, err := su.kubeclient.CoreV1().Pods(pod.Namespace).UpdateStatus(context.TODO(), pod, metav1.UpdateOptions{}); err != nil {
+					return nil, err
+				} else {
+					return result, nil
+				}
+			}
+		} else {
+			return result, nil
+		}
 	}
 	return pod, nil
 }
